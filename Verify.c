@@ -1,102 +1,146 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <openssl/evp.h>
-#include <openssl/pem.h>
-#include <openssl/err.h>
 
-int verify_signature(const char *pubkey_file, const char *data_file, 
-                     const char *sig_file)
+#include <openssl/sha.h>
+
+#include <tss2/tss2_esys.h>
+#include <tss2/tss2_tctildr.h>
+#include <tss2/tss2_rc.h>
+
+#define CHECK_RC(rc, msg)                                              \
+    do {                                                               \
+        if ((rc) != TSS2_RC_SUCCESS) {                                 \
+            fprintf(stderr, "%s failed: 0x%x\n", (msg), (rc));         \
+            goto cleanup;                                              \
+        }                                                              \
+    } while (0)
+
+static int read_binary_file(const char *path, unsigned char **buf, size_t *len)
 {
-    EVP_PKEY *pkey = NULL;
-    EVP_MD_CTX *mdctx = NULL;
-    FILE *fp = NULL;
-    unsigned char *sig = NULL;
-    unsigned char m[EVP_MAX_MD_SIZE];
-    size_t sig_len, m_len;
-    int ret = 1;
+    FILE *fp = fopen(path, "rb");
+    long sz;
 
-    // 公開鍵読み込み
-    fp = fopen(pubkey_file, "r");
-    if (!fp) {
-        perror("fopen pubkey");
-        goto cleanup;
-    }
-    pkey = PEM_read_PUBKEY(fp, NULL, NULL, NULL);
-    fclose(fp);
-    if (!pkey) {
-        fprintf(stderr, "PEM_read_PUBKEY failed\n");
-        ERR_print_errors_fp(stderr);
-        goto cleanup;
-    }
-
-    //hash
-    mdctx = EVP_MD_CTX_new();
-    if (!mdctx || !EVP_DigestVerifyInit(mdctx, NULL, EVP_sha256(), NULL, pkey)) {
-        fprintf(stderr, "EVP_DigestVerifyInit failed\n");
-        goto cleanup;
-    }
-
-    fp = fopen(data_file, "rb");
-    if (!fp) {
-        perror("fopen data");
-        goto cleanup;
-    }
-    
-    unsigned char buf[4096];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), fp)) > 0) {
-        if (!EVP_DigestVerifyUpdate(mdctx, buf, n)) {
-            fprintf(stderr, "EVP_DigestVerifyUpdate failed\n");
-            fclose(fp);
-            goto cleanup;
-        }
-    }
-    fclose(fp);
-
-    //signature load
-    fp = fopen(sig_file, "rb");
-    if (!fp) {
-        perror("fopen sig");
-        goto cleanup;
-    }
-    fseek(fp, 0, SEEK_END);
-    sig_len = ftell(fp);
+    if (!fp) return -1;
+    if (fseek(fp, 0, SEEK_END) != 0) { fclose(fp); return -1; }
+    sz = ftell(fp);
+    if (sz < 0) { fclose(fp); return -1; }
     rewind(fp);
-    sig = malloc(sig_len);
-    if (fread(sig, 1, sig_len, fp) != sig_len) {
-        perror("fread sig");
+
+    *buf = malloc((size_t)sz);
+    if (!*buf) { fclose(fp); return -1; }
+
+    if (fread(*buf, 1, (size_t)sz, fp) != (size_t)sz) {
         fclose(fp);
-        free(sig);
-        goto cleanup;
+        free(*buf);
+        *buf = NULL;
+        return -1;
     }
+
     fclose(fp);
-
-    //verify
-    if (EVP_DigestVerifyFinal(mdctx, sig, sig_len) > 0) {
-        printf("Verified OK\n");
-        ret = 0;
-    } else {
-        printf("Verification Failure\n");
-        ERR_print_errors_fp(stderr);
-    }
-
-cleanup:
-    EVP_PKEY_free(pkey);
-    EVP_MD_CTX_free(mdctx);
-    free(sig);
-    return ret;
+    *len = (size_t)sz;
+    return 0;
 }
 
-int main(int argc, char *argv[])
-{
-    if (argc != 4) {
-        fprintf(stderr, "Usage: %s pub.pem data.txt sig.bin\n", argv[0]);
+int main(int argc, char *argv[]){
+
+    TSS2_RC rc;
+    TSS2_TCTI_CONTEXT *tcti = NULL;
+    ESYS_CONTEXT *ctx = NULL;
+
+    unsigned char *data_buf = NULL;
+    size_t data_len = 0;
+
+    unsigned char *sig_buf = NULL;
+    size_t sig_len = 0;
+
+    TPM2B_DIGEST digest = {0};
+    TPMT_SIGNATURE signature = {0};
+    TPMT_TK_VERIFIED *validation = NULL;
+
+    ESYS_TR keyHandle = ESYS_TR_NONE;
+
+    TPM2_HANDLE persistentHandle = 0x81010001;
+
+    if (read_binary_file(argv[1], &data_buf, &data_len) != 0) {
+        fprintf(stderr, "failed to read data.bin\n");
         return 1;
     }
 
-    OpenSSL_add_all_algorithms();
-    ERR_load_crypto_strings();
+    if (read_binary_file("sig.bin", &sig_buf, &sig_len) != 0) {
+        fprintf(stderr, "failed to read sig.bin\n");
+        free(data_buf);
+        return 1;
+    }
 
-    return verify_signature(argv[1], argv[2], argv[3]);
+    if (data_len > 0) {
+        unsigned char hash[SHA256_DIGEST_LENGTH];
+        SHA256(data_buf, data_len, hash);
+
+        digest.size = SHA256_DIGEST_LENGTH;
+        memcpy(digest.buffer, hash, SHA256_DIGEST_LENGTH);
+    } else {
+        unsigned char hash[SHA256_DIGEST_LENGTH];
+        SHA256((const unsigned char *)"", 0, hash);
+
+        digest.size = SHA256_DIGEST_LENGTH;
+        memcpy(digest.buffer, hash, SHA256_DIGEST_LENGTH);
+    }
+
+    signature.sigAlg = TPM2_ALG_RSASSA;
+    signature.signature.rsassa.hash = TPM2_ALG_SHA256;
+
+    if (sig_len > sizeof(signature.signature.rsassa.sig.buffer)) {
+        fprintf(stderr, "signature too large\n");
+        free(data_buf);
+        free(sig_buf);
+        return 1;
+    }
+
+    signature.signature.rsassa.sig.size = (UINT16)sig_len;
+    memcpy(signature.signature.rsassa.sig.buffer, sig_buf, sig_len);
+
+    rc = Tss2_TctiLdr_Initialize(NULL, &tcti);
+    CHECK_RC(rc, "Tss2_TctiLdr_Initialize");
+
+    rc = Esys_Initialize(&ctx, tcti, NULL);
+    CHECK_RC(rc, "Esys_Initialize");
+
+    rc = Esys_TR_FromTPMPublic(
+        ctx,
+        persistentHandle,
+        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+        &keyHandle
+    );
+    CHECK_RC(rc, "Esys_TR_FromTPMPublic");
+
+    rc = Esys_VerifySignature(
+        ctx,
+        keyHandle,
+        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+        &digest,
+        &signature,
+        &validation
+    );
+    CHECK_RC(rc, "Esys_VerifySignature");
+
+    printf("Verified OK\n");
+
+cleanup:
+    if (validation) {
+        Esys_Free(validation);
+    }
+    if (keyHandle != ESYS_TR_NONE) {
+        Esys_TR_Close(ctx, &keyHandle);
+    }
+    if (ctx) {
+        Esys_Finalize(&ctx);
+    }
+    if (tcti) {
+        Tss2_TctiLdr_Finalize(&tcti);
+    }
+    free(data_buf);
+    free(sig_buf);
+
+    return (rc == TSS2_RC_SUCCESS) ? 0 : 1;
 }
