@@ -45,13 +45,32 @@ static unsigned char *data_read(const char *path, size_t *out_size) {
     return buf;
 }
 
+static void context_finalize(TSS2_TCTI_CONTEXT *tcti, TSS2_SYS_CONTEXT *sys){
+    if(sys){
+        Tss2_Sys_Finalize(sys);
+        free(sys);
+    }
+    if(tcti){
+        Tss2_TctiLdr_Finalize(&tcti);
+        free(tcti);
+    }
+}
+
+static void rc_check(TSS2_RC rc, TSS2_TCTI_CONTEXT *tcti, TSS2_SYS_CONTEXT *sys){
+    if(rc != TSS2_RC_SUCCESS){
+        printf("Failed:0x%x\n", rc);
+        printf("%s\n", Tss2_RC_Decode(rc));
+        context_finalize(tcti, sys);
+        exit(1);
+    }
+}
+
 static void save_signature(const TPMT_SIGNATURE *sig, const char *path){
     FILE *fp = fopen(path, "wb");
     if(!fp){
         perror("fopen");
         exit(1);
     }
-    /*
     size_t written = fwrite(sig->signature.rsassa.sig.buffer, 1, sig->signature.rsassa.sig.size, fp);
     fclose(fp);
 
@@ -59,18 +78,18 @@ static void save_signature(const TPMT_SIGNATURE *sig, const char *path){
         fprintf(stderr, "failed to write signature file\n");
         exit(1);
     }
-    */
     printf("saved signature\n");
 }
 
 int main(int argc, char *argv[]){
-    TSS2_ABI_VERSION *CURRENT = NULL;
-    size_t size;
-    TSS2_SYS_CONTEXT *s_ctx = NULL;
-    TSS2_TCTI_CONTEXT *tcti = NULL;
+
     TSS2_RC rc;
-    TPMI_DH_OBJECT hmac_handle = 0x81010001;
-    TPMI_DH_OBJECT sign_handle = 0x81010010;
+    size_t size;
+    static TSS2_SYS_CONTEXT *s_ctx = NULL;
+    static TSS2_TCTI_CONTEXT *tcti = NULL;
+    TSS2_ABI_VERSION *CURRENT = NULL;
+    const TPMI_DH_OBJECT hmac_handle = 0x81010001;
+    const TPMI_DH_OBJECT sign_handle = 0x81010010;
 
     //tcti = (TSS2_TCTI_CONTEXT*)calloc(1,size); 
 
@@ -119,11 +138,33 @@ int main(int argc, char *argv[]){
             &validation,
             NULL
             );
-    if(rc != TSS2_RC_SUCCESS){
-        printf("Hash failed:0x%x\n",rc);
+    rc_check(rc, tcti, s_ctx);
+    printf("hash success\n");
+
+    size_t data_dummy_size;
+    const char *message_dummy = data_read(argv[2], &data_dummy_size);
+    if(!message_dummy){
+        fprintf(stderr, "Failed to read dummy data\n");
         return 1;
     }
-    printf("hash success\n");
+
+    TPM2B_MAX_BUFFER data_dummy = { .size = data_dummy_size };
+    memcpy(data.buffer, message_dummy, data.size);
+
+    TPM2B_DIGEST hash_Dummy = {0};
+    TPMT_TK_HASHCHECK validation_dummy;
+
+    rc = Tss2_Sys_Hash(
+            s_ctx,
+            NULL,
+            &data_dummy,
+            TPM2_ALG_SHA256,
+            TPM2_RH_NULL,
+            &hash_Dummy,
+            &validation_dummy,
+            NULL);
+    rc_check(rc, tcti, s_ctx);
+    printf("dummy hash success\n");
 /*
     printf("Hash(%u bytes): ", outHash.size);
     for(UINT16 i = 0; i < outHash.size; i++)
@@ -131,9 +172,7 @@ int main(int argc, char *argv[]){
     printf("\n");
 */ 
     TPMI_SH_AUTH_SESSION session_handle = TPM2_RH_NULL;
-
     //Tss2_Sys_SetCmdAuths(s_ctx, &CmdAuth);
-
     TSS2L_SYS_AUTH_RESPONSE rspAuth = {0};
     TPM2B_NONCE nonceCaller = {0};
     TPM2B_NONCE nonceTPM = {0};
@@ -156,12 +195,7 @@ int main(int argc, char *argv[]){
             &session_handle,
             &nonceTPM,
             &rspAuth);
-
-    if(rc != TSS2_RC_SUCCESS){
-        printf("Authsession failed:0x%x\n", rc);
-        printf("%s\n", Tss2_RC_Decode(rc));
-        return 1;
-    }
+    rc_check(rc, tcti, s_ctx);
     printf("Authsession succsess\n");
 
     TSS2L_SYS_AUTH_COMMAND CmdAuth;
@@ -171,21 +205,16 @@ int main(int argc, char *argv[]){
     CmdAuth.auths -> sessionAttributes = TPMA_SESSION_CONTINUESESSION;
     CmdAuth.auths -> hmac.size = 0;
 
-    TPM2B_DIGEST *outHMAC;
-
+    TPM2B_DIGEST outHMAC = {0};
     rc = Tss2_Sys_HMAC(
             s_ctx,
             hmac_handle,
             &CmdAuth,
             &data,
             TPM2_ALG_SHA256,
-            outHMAC,
+            &outHMAC,
             &rspAuth);
-    if(rc != TSS2_RC_SUCCESS){
-        printf("HMAC failed:0x%x\n", rc);
-        printf("%s\n", Tss2_RC_Decode(rc));
-        return 1;
-    }
+    rc_check(rc, tcti, s_ctx);
     printf("HMAC success\n");
 
     TPMT_SIG_SCHEME scheme = {
@@ -211,33 +240,41 @@ int main(int argc, char *argv[]){
             &validation,
             &signature,
             &rspAuth);
-    if(rc != TPM2_RC_SUCCESS){
-        printf("Sign Failed:0x%x\n", rc);
-        printf("%s\n", Tss2_RC_Decode(rc));
-        free(s_ctx);
-        free(tcti);
-        return 1;
-    };
-
+    rc_check(rc, tcti, s_ctx);
     printf("sign success\n");
 
-    if(!signature.signature.rsassa.sig.size){
-        printf("yeah\n");
-    }else{
+    if(!signature.signature.rsassa.sig.size)
+        printf("No Signature\n");
+    else{
         printf("size:%u\n", signature.signature.rsassa.sig.size);
-    };
-
-    //save_signature(signature, "sig.bin");
-    
-
-    if(s_ctx){
-        Tss2_Sys_Finalize(s_ctx);
-        free(s_ctx);
     }
 
-    if(tcti){
-        Tss2_TctiLdr_Finalize(&tcti);
-        free(tcti);
-    }
+    save_signature(&signature, "signature.bin");
+
+    TPMT_TK_VERIFIED validation_verify;
+
+    Tss2_Sys_VerifySignature(
+            s_ctx,
+            sign_handle,
+            &CmdAuth,
+            &hash,
+            &signature,
+            &validation_verify,
+            &rspAuth);
+    rc_check(rc, tcti, s_ctx);
+    printf("Verify success\n");
+
+    Tss2_Sys_VerifySignature(
+            s_ctx,
+            sign_handle,
+            &CmdAuth,
+            &hash_Dummy,
+            &signature,
+            &validation_verify,
+            &rspAuth);
+    rc_check(rc, tcti, s_ctx);
+    printf("Verify success\n");
+
+    context_finalize(tcti, s_ctx);
     return 0;
 }
