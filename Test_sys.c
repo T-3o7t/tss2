@@ -222,6 +222,29 @@ int main(int argc, char *argv[]){
         .details.rsassa.hashAlg = TPM2_ALG_SHA256
     };
 
+    TSS2L_SYS_AUTH_COMMAND CmdAuth_dummy;
+    CmdAuth_dummy.count =  1;
+    CmdAuth_dummy.auths -> sessionHandle = session_handle;
+    CmdAuth_dummy.auths -> nonce.size = 0;
+    CmdAuth_dummy.auths -> sessionAttributes = TPMA_SESSION_CONTINUESESSION;
+    CmdAuth_dummy.auths -> hmac.size = 0;
+
+    TPM2B_DIGEST outHMAC_dummy = {0};
+    rc = Tss2_Sys_HMAC(
+            s_ctx,
+            hmac_handle,
+            &CmdAuth_dummy,
+            &data_dummy,
+            TPM2_ALG_SHA256,
+            &outHMAC,
+            &rspAuth);
+    rc_check(rc, tcti, s_ctx);
+    printf("dummy HMAC success\n");
+    if(memcmp(outHMAC.buffer, outHMAC_dummy.buffer, outHMAC.size) == 0)printf("valid\n");
+    else{
+        printf("invalid\n");
+    }
+
     TPMT_SIGNATURE signature = {0};
 
     TSS2L_SYS_AUTH_COMMAND CmdAuth_sign = {0};
@@ -249,14 +272,15 @@ int main(int argc, char *argv[]){
         printf("size:%u\n", signature.signature.rsassa.sig.size);
     }
 
-    save_signature(&signature, "signature.bin");
+    //save_signature(&signature, "signature.bin");
 
     TPMT_TK_VERIFIED validation_verify;
 
-    Tss2_Sys_VerifySignature(
+    rc = Tss2_Sys_VerifySignature(
             s_ctx,
             sign_handle,
-            &CmdAuth,
+            //&CmdAuth_sign,
+            NULL,
             &hash,
             &signature,
             &validation_verify,
@@ -264,16 +288,17 @@ int main(int argc, char *argv[]){
     rc_check(rc, tcti, s_ctx);
     printf("Verify success\n");
 
-    Tss2_Sys_VerifySignature(
+    rc = Tss2_Sys_VerifySignature(
             s_ctx,
             sign_handle,
-            &CmdAuth,
+            //&CmdAuth_sign,
+            NULL,
             &hash_Dummy,
             &signature,
             &validation_verify,
             &rspAuth);
     rc_check(rc, tcti, s_ctx);
-    printf("Verify success\n");
+    //printf("%s\n", Tss2_RC_Decode(rc));
 
     context_finalize(tcti, s_ctx);
     return 0;
