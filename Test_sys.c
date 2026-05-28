@@ -287,7 +287,7 @@ int main(int argc, char *argv[]){
             &rspAuth);
     rc_check(rc, tcti, s_ctx);
     printf("Verify success\n");
-
+/*
     rc = Tss2_Sys_VerifySignature(
             s_ctx,
             sign_handle,
@@ -299,6 +299,51 @@ int main(int argc, char *argv[]){
             &rspAuth);
     rc_check(rc, tcti, s_ctx);
     //printf("%s\n", Tss2_RC_Decode(rc));
+*/
+    TPM2B_DATA qualifyingData;
+    qualifyingData.size = 0;
+
+    TSS2L_SYS_AUTH_COMMAND CmdAuth_quote;
+    CmdAuth_quote.count = 1;
+    CmdAuth_quote.auths -> sessionHandle = TPM2_RS_PW;
+
+    TPML_DIGEST_VALUES ext_value;
+    ext_value.count = 1;
+    ext_value.digests -> hashAlg = TPM2_ALG_SHA256;
+
+    rc = Tss2_Sys_PCR_Extend(
+            s_ctx,
+            16,
+            &CmdAuth_quote,
+            &ext_value,
+            &rspAuth
+            );
+    rc_check(rc, tcti, s_ctx);
+    printf("extend success\n");
+
+    TPM2B_ATTEST quoted;
+    TPMT_SIGNATURE signature_quote;
+
+    TPML_PCR_SELECTION Select_PCR;
+    Select_PCR.count = 1;
+    Select_PCR.pcrSelections -> hash = TPM2_ALG_SHA256;
+    Select_PCR.pcrSelections -> sizeofSelect = 3;
+    Select_PCR.pcrSelections -> pcrSelect[0] = 1 << 4;
+
+    rc = Tss2_Sys_Quote(
+            s_ctx,
+            sign_handle,
+            &CmdAuth_quote,
+            &qualifyingData,
+            &scheme,
+            &Select_PCR,
+            &quoted,
+            &signature_quote,
+            &rspAuth
+            );
+    rc_check(rc, tcti, s_ctx);
+    printf("quote success\n");
+
 
     context_finalize(tcti, s_ctx);
     return 0;
