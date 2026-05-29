@@ -265,13 +265,13 @@ int main(int argc, char *argv[]){
             &rspAuth);
     rc_check(rc, tcti, s_ctx);
     printf("sign success\n");
-
+/*  //signaturecheck
     if(!signature.signature.rsassa.sig.size)
         printf("No Signature\n");
     else{
         printf("size:%u\n", signature.signature.rsassa.sig.size);
     }
-
+*/
     //save_signature(&signature, "signature.bin");
 
     TPMT_TK_VERIFIED validation_verify;
@@ -286,7 +286,7 @@ int main(int argc, char *argv[]){
             &validation_verify,
             &rspAuth);
     rc_check(rc, tcti, s_ctx);
-    printf("Verify success\n");
+    printf("hash signature verify success\n");
 /*
     rc = Tss2_Sys_VerifySignature(
             s_ctx,
@@ -300,8 +300,6 @@ int main(int argc, char *argv[]){
     rc_check(rc, tcti, s_ctx);
     //printf("%s\n", Tss2_RC_Decode(rc));
 */
-    TPM2B_DATA qualifyingData;
-    qualifyingData.size = 0;
 
     TSS2L_SYS_AUTH_COMMAND CmdAuth_quote;
     CmdAuth_quote.count = 1;
@@ -310,6 +308,7 @@ int main(int argc, char *argv[]){
     TPML_DIGEST_VALUES ext_value;
     ext_value.count = 1;
     ext_value.digests -> hashAlg = TPM2_ALG_SHA256;
+    memcpy(ext_value.digests -> digest.sha256, outHMAC.buffer, outHMAC.size);
 
     rc = Tss2_Sys_PCR_Extend(
             s_ctx,
@@ -321,14 +320,38 @@ int main(int argc, char *argv[]){
     rc_check(rc, tcti, s_ctx);
     printf("extend success\n");
 
-    TPM2B_ATTEST quoted;
-    TPMT_SIGNATURE signature_quote;
+    TPM2B_DATA qualifyingData;
+    qualifyingData.size = 20;
+    TPM2B_DIGEST nonce;
 
+    rc = Tss2_Sys_GetRandom(
+		    s_ctx,
+		    NULL,
+		    qualifyingData.size,
+		    &nonce,
+		    &rspAuth
+		    );
+    rc_check(rc, tcti, s_ctx);
+    printf("getrandom success\n");
+
+    memcpy(qualifyingData.buffer, nonce.buffer, qualifyingData.size);
+    //printf("get nonce:%x\tqualifyingData:%x\n", nonce.size, qualifyingData.size);
+
+    TPM2B_ATTEST quoted;
+    TPMT_SIGNATURE signature_quote = {0};
+
+	/*
+	pcrSelect[0] → PCR 0 ～ 7
+	pcrSelect[1] → PCR 8 ～ 15
+	pcrSelect[2] → PCR 16 ～ 23
+	*/
     TPML_PCR_SELECTION Select_PCR;
     Select_PCR.count = 1;
     Select_PCR.pcrSelections -> hash = TPM2_ALG_SHA256;
     Select_PCR.pcrSelections -> sizeofSelect = 3;
-    Select_PCR.pcrSelections -> pcrSelect[0] = 1 << 4;
+	//Select_PCR.pcrSelections -> pcrSelect[0] = ;
+	//Select_PCR.pcrSelections -> pcrSelect[1] = ;
+    Select_PCR.pcrSelections -> pcrSelect[2] = 1;
 
     rc = Tss2_Sys_Quote(
             s_ctx,
@@ -343,7 +366,40 @@ int main(int argc, char *argv[]){
             );
     rc_check(rc, tcti, s_ctx);
     printf("quote success\n");
+  
+    TPM2B_MAX_BUFFER data_quote;
+    data_quote.size = quoted.size;
+    memcpy(data_quote.buffer, quoted.attestationData, data_quote.size);
+	//printf("%x\t%lx\n", quoted.size, sizeof(quoted.attestationData));
 
+    TPM2B_DIGEST hash_quote = {0};
+    TPMT_TK_HASHCHECK validation_quote;
+    TPMT_TK_VERIFIED validation_verify_quote;
+
+    rc = Tss2_Sys_Hash(
+            s_ctx,
+            NULL,
+            &data_quote,
+            TPM2_ALG_SHA256,
+            TPM2_RH_NULL,
+            &hash_quote,
+            &validation_quote,
+            NULL
+	    );
+    rc_check(rc, tcti, s_ctx);
+    printf("quote hash success\n");
+
+    rc = Tss2_Sys_VerifySignature(
+		    s_ctx,
+		    sign_handle,
+		    NULL,
+		    &hash_quote,
+		    &signature_quote,
+		    &validation_verify_quote,
+		    &rspAuth
+		    );
+    rc_check(rc, tcti, s_ctx);
+    printf("quote verify success\n");
 
     context_finalize(tcti, s_ctx);
     return 0;
