@@ -6,6 +6,7 @@ git clone https://github.com/T-3o7t/myTPM.git
 ./CreateKey.sh
 
 echo message > data.txt
+echo message_modify > data_mod.txt
 
 cc -o Signature Signature_esys.c -ltss2-esys -ltss2-mu -ltss2-tctildr
 cc -o verify_tpm Verify_tpm_esys.c -ltss2-esys -ltss2-tctildr -lssl -lcrypto
