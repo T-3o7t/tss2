@@ -26,7 +26,7 @@ static void rc_check(TSS2_RC rc, TSS2_TCTI_CONTEXT *tcti, TSS2_SYS_CONTEXT *sys)
             exit(1);
     }
 }
-
+/*
 static void save_signature(TPMT_SIGNATURE *sig, const char *path){
     FILE *fp = fopen(path, "wb");
     if(!fp){
@@ -58,7 +58,7 @@ static void save_quote(TPM2B_ATTEST *quote, const char *path){
         exit(1);
     }
 }
-
+*/
 int main(int argc, char *argv[]){
     TSS2_RC rc;
     size_t size;
@@ -128,12 +128,45 @@ int main(int argc, char *argv[]){
             );
     rc_check(rc, t_ctx, s_ctx);
     printf("quote OK\n");
-
+/*
     save_signature(&signature, "sig.bin");
     printf("signature save OK\n");
 
     save_quote(&quote, "quote.bin");
     printf("quote save OK\n");
+*/
+    TPM2B_MAX_BUFFER data_quote;
+    data_quote.size = quote.size;
+    memcpy(data_quote.buffer, quote.attestationData, data_quote.size);
+
+    TPM2B_DIGEST hash_quote = {0};
+    TPMT_TK_HASHCHECK validation_quote;
+    TPMT_TK_VERIFIED validation_verify_quote;
+
+    rc = Tss2_Sys_Hash(
+            s_ctx,
+            NULL,
+            &data_quote,
+            TPM2_ALG_SHA256,
+            TPM2_RH_NULL,
+            &hash_quote,
+            &validation_quote,
+            NULL
+            );
+    rc_check(rc, t_ctx, s_ctx);
+    printf("quote hash success\n");
+
+    rc = Tss2_Sys_VerifySignature(
+                    s_ctx,
+                    handle,
+                    NULL,
+                    &hash_quote,
+                    &signature,
+                    &validation_verify_quote,
+                    &rspAuth
+                    );
+    rc_check(rc, t_ctx, s_ctx);
+    printf("quote verify success\n");
 
     ctx_finalize(t_ctx, s_ctx);
     return 0;
