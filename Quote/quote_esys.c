@@ -22,7 +22,7 @@ static void rc_check(TSS2_RC rc, TSS2_TCTI_CONTEXT *tcti, ESYS_CONTEXT *esys){
     if(rc != TSS2_RC_SUCCESS){
         printf("Failed:0x%x\n", rc);
         printf("%s\n", Tss2_RC_Decode(rc));
-        context_finalize(tcti, esys);
+        ctx_finalize(tcti, esys);
         exit(1);
     }
 }
@@ -57,7 +57,7 @@ int main(void){
 
     rc = Esys_TR_FromTPMPublic(
         es_ctx,
-        0x81010100,
+        0x81010010,
         ESYS_TR_NONE,
         ESYS_TR_NONE,
         ESYS_TR_NONE,
@@ -80,9 +80,9 @@ int main(void){
     memcpy(qualifyingData.buffer, nonce->buffer, qualifyingData.size);
 
     TPML_DIGEST_VALUES ex_value;
-    ext_value.count = 1;
-    ext_value.digests -> hashAlg = TPM2_ALG_SHA256;
-    memcpy(ext_value.digests -> digest.sha256, nonce->buffer, nonce->size);
+    ex_value.count = 1;
+    ex_value.digests -> hashAlg = TPM2_ALG_SHA256;
+    memcpy(ex_value.digests -> digest.sha256, nonce->buffer, nonce->size);
 
     rc = Esys_PCR_Extend(
             es_ctx,
@@ -128,8 +128,8 @@ int main(void){
     printf("quote OK\n");
 
     TPM2B_MAX_BUFFER data;
-    data.size = quote.size;
-    memcpy(data.buffer, quote.attastationData, quote.size);
+    data.size = quote->size;
+    memcpy(data.buffer, quote->attestationData, quote->size);
 
     TPM2B_DIGEST *digest = NULL;
     TPMT_TK_HASHCHECK *validation = NULL;
