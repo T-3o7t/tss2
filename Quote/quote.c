@@ -1,12 +1,11 @@
 #include <stdio.h>
-#include "quote.h"
-/*
 #include <string.h>
+
 #include <tss2/tss2_tctildr.h>
 #include <tss2/tss2_sys.h>
 #include <tss2/tss2_rc.h>
 #include <tss2/tss2_common.h>
-*/
+
 static void ctx_finalize(TSS2_TCTI_CONTEXT *tcti, TSS2_SYS_CONTEXT *sys){
     if(sys){
         Tss2_Sys_Finalize(sys);
@@ -26,7 +25,7 @@ static void rc_check(TSS2_RC rc, TSS2_TCTI_CONTEXT *tcti, TSS2_SYS_CONTEXT *sys)
             exit(1);
     }
 }
-/*
+
 static void save_signature(TPMT_SIGNATURE *sig, const char *path){
     FILE *fp = fopen(path, "wb");
     if(!fp){
@@ -58,14 +57,13 @@ static void save_quote(TPM2B_ATTEST *quote, const char *path){
         exit(1);
     }
 }
-*/
+
 int main(int argc, char *argv[]){
     TSS2_RC rc;
     size_t size;
     static TSS2_SYS_CONTEXT *s_ctx;
     static TSS2_TCTI_CONTEXT *t_ctx;
     TSS2_ABI_VERSION *CURRENT = NULL;
-    const TPMI_DH_OBJECT handle = 0x81010010;
 
     rc = Tss2_TctiLdr_Initialize(NULL, &t_ctx);
     rc_check(rc, t_ctx, s_ctx);
@@ -82,22 +80,160 @@ int main(int argc, char *argv[]){
     CmdAuth.count = 1;
     CmdAuth.auths -> sessionHandle = TPM2_RS_PW;
 
+    TSS2L_SYS_AUTH_RESPONSE rspAuth = {0};
+
+     TPM2B_SENSITIVE_CREATE inSensitive = {
+        .size = 0,
+        .sensitive = {
+            .userAuth = {.size = 0},
+            .data     = {.size = 0},
+        }
+    };
+
+    TPM2B_PUBLIC inPublic = {
+        .size = 0,
+        .publicArea = {
+            .type = TPM2_ALG_RSA,
+            .nameAlg = TPM2_ALG_SHA256,
+            .objectAttributes =
+                TPMA_OBJECT_FIXEDTPM |
+                TPMA_OBJECT_FIXEDPARENT |
+                TPMA_OBJECT_SENSITIVEDATAORIGIN |
+                TPMA_OBJECT_USERWITHAUTH |
+                TPMA_OBJECT_RESTRICTED |
+                TPMA_OBJECT_DECRYPT,
+
+            .authPolicy = {.size = 0},
+            .parameters.rsaDetail = {
+                .symmetric = {
+                    .algorithm = TPM2_ALG_AES,
+                    .keyBits   = {.aes = 128},
+                    .mode      = {.aes = TPM2_ALG_CFB}
+                },
+                .scheme = {.scheme = TPM2_ALG_NULL},
+                .keyBits = 2048,
+                .exponent = 0,
+            },
+            .unique.rsa = {.size = 0},
+        }
+    };
+
+    TPM2B_DATA outsideInfo = {
+        .size = 0,
+    };
+
+    TPML_PCR_SELECTION creationPCR = {
+        .count = 0,
+    };
+
+    TPM2_HANDLE primary_handle;
+    TPM2B_PUBLIC outPublic = {0};
+    TPM2B_CREATION_DATA Data = {0};
+    TPM2B_DIGEST Hash = {0};
+    TPMT_TK_CREATION Ticket = {0};
+    TPM2B_NAME primary_name = {0};
+
+    rc = Tss2_Sys_CreatePrimary(
+            s_ctx,
+            TPM2_RH_OWNER,
+            &CmdAuth,
+            &inSensitive,
+            &inPublic,
+            &outsideInfo,
+            &creationPCR,
+            &primary_handle,
+            &outPublic,
+            &Data,
+            &Hash,
+            &Ticket,
+            &primary_name,
+            &rspAuth
+            );
+
+    rc_check(rc, t_ctx, s_ctx);
+    printf("Primary key created. Handle: 0x%x\n", primary_handle);
+
+    TPM2B_PUBLIC ak_inPublic = {
+        .size = 0,
+        .publicArea = {
+            .type = TPM2_ALG_RSA,
+            .nameAlg = TPM2_ALG_SHA256,
+            .objectAttributes =
+                TPMA_OBJECT_FIXEDTPM |
+                TPMA_OBJECT_FIXEDPARENT |
+                TPMA_OBJECT_SENSITIVEDATAORIGIN |
+                TPMA_OBJECT_USERWITHAUTH |
+                TPMA_OBJECT_SIGN_ENCRYPT |
+                TPMA_OBJECT_RESTRICTED,
+            .authPolicy = {.size = 0},
+            .parameters.rsaDetail = {
+                .symmetric = {.algorithm = TPM2_ALG_NULL},
+                .scheme = {
+                    .scheme = TPM2_ALG_RSASSA,
+                    .details.rsassa.hashAlg = TPM2_ALG_SHA256
+                },
+                .keyBits = 2048,
+                .exponent = 0,
+            },
+            .unique.rsa = {.size = 0},
+        }
+    };
+
+    TPM2B_PUBLIC ak_pub = {0};
+    TPM2B_PRIVATE ak_priv = {0};
+    TPM2B_CREATION_DATA ak_Data = {0};
+    TPM2B_DIGEST ak_Hash = {0};
+    TPMT_TK_CREATION ak_Ticket = {0};
+
+    rc = Tss2_Sys_Create(
+        s_ctx,
+        primary_handle,
+        &CmdAuth,
+        &inSensitive,
+        &ak_inPublic,
+        &outsideInfo,
+        &creationPCR,
+        &ak_priv,
+        &ak_pub,
+        &ak_Data,
+        &ak_Hash,
+        &ak_Ticket,
+        &rspAuth);
+
+    rc_check(rc, t_ctx, s_ctx);
+    printf("create ak OK\n");
+
+    TPM2_HANDLE ak_handle;
+    TPM2B_NAME ak_name;
+
+    rc = Tss2_Sys_Load(
+        s_ctx,
+        primary_handle,
+        &CmdAuth,
+        &ak_priv,
+        &ak_pub,
+        &ak_handle,
+        &ak_name,
+        &rspAuth);
+
+    rc_check(rc, t_ctx, s_ctx);
+    printf("load OK\n");
+
     TPMT_SIG_SCHEME scheme;
     scheme.scheme = TPM2_ALG_RSASSA;
     scheme.details.rsassa.hashAlg = TPM2_ALG_SHA256;
 
-    TSS2L_SYS_AUTH_RESPONSE rspAuth = {0};
     TPM2B_DATA qualifyingData;
     qualifyingData.size = 20;
     TPM2B_DIGEST nonce;
 
     rc = Tss2_Sys_GetRandom(
-            s_ctx,
-            NULL,
-            qualifyingData.size,
-            &nonce,
-            &rspAuth
-            );
+        s_ctx,
+        NULL,
+        qualifyingData.size,
+        &nonce,
+        &rspAuth);
+
     rc_check(rc, t_ctx, s_ctx);
     printf("nonce OK\n");
     
@@ -116,25 +252,38 @@ int main(int argc, char *argv[]){
     Select_PCR.pcrSelections -> pcrSelect[2] = 1;           //16~23
 
     rc = Tss2_Sys_Quote(
-            s_ctx,
-            handle,
-            &CmdAuth,
-            &qualifyingData,
-            &scheme,
-            &Select_PCR,
-            &quote,
-            &signature,
-            &rspAuth
-            );
+        s_ctx,
+        ak_handle,
+        &CmdAuth,
+        &qualifyingData,
+        &scheme,
+        &Select_PCR,
+        &quote,
+        &signature,
+        &rspAuth);
+
     rc_check(rc, t_ctx, s_ctx);
     printf("quote OK\n");
-/*
-    save_signature(&signature, "sig.bin");
-    printf("signature save OK\n");
 
-    save_quote(&quote, "quote.bin");
-    printf("quote save OK\n");
-*/
+    TSS2L_SYS_AUTH_COMMAND CmdAuth_quote = {0};
+    CmdAuth_quote.count = 1;
+    CmdAuth_quote.auths -> sessionHandle = TPM2_RS_PW;
+
+    TPML_DIGEST_VALUES value;
+    value.count = 1;
+    value.digests -> hashAlg = TPM2_ALG_SHA256;
+    memcpy(value.digests -> digest.sha256, quote.attestationData, quote.size);
+
+    rc = Tss2_Sys_PCR_Extend(
+        s_ctx,
+        16,
+        &CmdAuth_quote,
+        &value,
+        &rspAuth);
+
+    rc_check(rc, t_ctx, s_ctx);
+    printf("Extend OK\n");
+
     TPM2B_MAX_BUFFER data_quote;
     data_quote.size = quote.size;
     memcpy(data_quote.buffer, quote.attestationData, data_quote.size);
@@ -144,27 +293,27 @@ int main(int argc, char *argv[]){
     TPMT_TK_VERIFIED validation_verify_quote;
 
     rc = Tss2_Sys_Hash(
-            s_ctx,
-            NULL,
-            &data_quote,
-            TPM2_ALG_SHA256,
-            TPM2_RH_NULL,
-            &hash_quote,
-            &validation_quote,
-            NULL
-            );
+        s_ctx,
+        NULL,
+        &data_quote,
+        TPM2_ALG_SHA256,
+        TPM2_RH_NULL,
+        &hash_quote,
+        &validation_quote,
+        NULL);
+
     rc_check(rc, t_ctx, s_ctx);
-    printf("quote hash success\n");
+    printf("hash success\n");
 
     rc = Tss2_Sys_VerifySignature(
-                    s_ctx,
-                    handle,
-                    NULL,
-                    &hash_quote,
-                    &signature,
-                    &validation_verify_quote,
-                    &rspAuth
-                    );
+        s_ctx,
+        ak_handle,
+        NULL,
+        &hash_quote,
+        &signature,
+        &validation_verify_quote,
+        &rspAuth);
+
     rc_check(rc, t_ctx, s_ctx);
     printf("quote verify success\n");
 
