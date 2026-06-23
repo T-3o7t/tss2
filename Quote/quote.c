@@ -25,7 +25,7 @@ static void rc_check(TSS2_RC rc, TSS2_TCTI_CONTEXT *tcti, TSS2_SYS_CONTEXT *sys)
             exit(1);
     }
 }
-
+/*
 static void save_signature(TPMT_SIGNATURE *sig, const char *path){
     FILE *fp = fopen(path, "wb");
     if(!fp){
@@ -57,7 +57,7 @@ static void save_quote(TPM2B_ATTEST *quote, const char *path){
         exit(1);
     }
 }
-
+*/
 int main(int argc, char *argv[]){
     TSS2_RC rc;
     size_t size;
