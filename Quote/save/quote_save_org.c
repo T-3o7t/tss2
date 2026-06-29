@@ -8,46 +8,6 @@
 
 //#include <tss2/tss2_mu.h>
 
-static unsigned char *data_read(const char *path, size_t *out_size) {
-    FILE *fp = fopen(path, "rb");
-    unsigned char *buf;
-    long sz;
-
-    if (!fp) {
-        perror("fopen");
-        return NULL;
-    }
-
-    if (fseek(fp, 0, SEEK_END) != 0) {
-        fclose(fp);
-        return NULL;
-    }
-
-    sz = ftell(fp);
-    if (sz < 0) {
-        fclose(fp);
-        return NULL;
-    }
-
-    rewind(fp);
-
-    buf = malloc((size_t)sz);
-    if (!buf) {
-        fclose(fp);
-        return NULL;
-    }
-
-    if (fread(buf, 1, (size_t)sz, fp) != (size_t)sz) {
-        free(buf);
-        fclose(fp);
-        return NULL;
-    }
-
-    fclose(fp);
-    *out_size = (size_t)sz;
-    return buf;
-}
-
 static void ctx_finalize(TSS2_TCTI_CONTEXT *tcti, ESYS_CONTEXT *esys){
     if(esys){
         Esys_Finalize(&esys);
@@ -238,6 +198,38 @@ int main(void){
     printf("Marshal OK\n");
     printf("Marshal size = %zu\n", ak_offset);	
 */
+    TPM2B_DATA qualifyingData;
+    qualifyingData.size = 20;
+    TPM2B_DIGEST *nonce;
+
+    rc = Esys_GetRandom(
+            es_ctx,
+            ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+            qualifyingData.size,
+            &nonce
+            );
+    rc_check(rc, t_ctx, es_ctx);
+    printf("nonce OK\n");
+
+	FILE *fp_nonce = fopen("../nonce.bin", "wb");
+	fwrite(nonce->buffer, 1, qualifyingData.size, fp_nonce);
+	fclose(fp_nonce);
+
+    memcpy(qualifyingData.buffer, nonce->buffer, qualifyingData.size);
+
+    TPML_DIGEST_VALUES ex_value;
+    ex_value.count = 1;
+    ex_value.digests -> hashAlg = TPM2_ALG_SHA256;
+    memcpy(ex_value.digests -> digest.sha256, nonce->buffer, nonce->size);
+
+    rc = Esys_PCR_Extend(
+            es_ctx,
+            ESYS_TR_PCR16,
+            ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
+            &ex_value
+            );
+    rc_check(rc, t_ctx, es_ctx);
+    printf("extend OK\n");
 
     TPM2B_ATTEST *quote;
     TPMT_SIGNATURE *signature;
@@ -260,12 +252,6 @@ int main(void){
     Select_PCR.pcrSelections -> pcrSelect[1] = 0x00;
     Select_PCR.pcrSelections -> pcrSelect[2] = 0x00;
 
-    TPM2B_DATA qualifyingData;
-    qualifyingData.size = 20;
-	size_t nonce_size = qualifyingData.size;
-	unsigned char *nonce = data_read("../nonce.bin", &nonce_size);
-	memcpy(nonce, qualifyingData.buffer, nonce_size);
-
     rc = Esys_Quote(
             es_ctx,
             handle,
@@ -278,14 +264,15 @@ int main(void){
             );
     rc_check(rc, t_ctx, es_ctx);
     printf("quote OK\n");
+	
+	FILE *fp_quote = fopen("../quote.bin", "wb");
+	fwrite(quote->attestationData, 1, quote->size, fp_quote);
+	fclose(fp_quote);
 
-	size_t check_size = quote->size;
-	unsigned char *message = data_read("../quote.bin", &check_size);
-	if(memcmp(quote->attestationData, message, quote->size)==0)
-		printf("quote check OK\n");
-	else
-		printf("quote check failed\n");
-
+	FILE *fp_sig = fopen("../sig.bin", "wb");
+	fwrite(signature->signature.rsassa.sig.buffer, 1, signature->signature.rsassa.sig.size, fp_sig);
+	fclose(fp_sig);
+/*
     TPM2B_MAX_BUFFER data;
     data.size = quote->size;
     memcpy(data.buffer, quote->attestationData, quote->size);
@@ -318,7 +305,7 @@ int main(void){
             );
     rc_check(rc, t_ctx, es_ctx);
     printf("verify OK\n");
-
+*/
 	Esys_Free(outPublic);
     Esys_Free(primary_Data);
     Esys_Free(primary_Hash);

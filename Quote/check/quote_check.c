@@ -5,8 +5,9 @@
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_rc.h>
 #include <tss2/tss2_common.h>
-
-//#include <tss2/tss2_mu.h>
+#include <tss2/tss2_mu.h>
+#include <openssl/pem.h>
+#include <openssl/err.h>
 
 static unsigned char *data_read(const char *path, size_t *out_size) {
     FILE *fp = fopen(path, "rb");
@@ -47,6 +48,7 @@ static unsigned char *data_read(const char *path, size_t *out_size) {
     *out_size = (size_t)sz;
     return buf;
 }
+
 
 static void ctx_finalize(TSS2_TCTI_CONTEXT *tcti, ESYS_CONTEXT *esys){
     if(esys){
@@ -279,17 +281,15 @@ int main(void){
     rc_check(rc, t_ctx, es_ctx);
     printf("quote OK\n");
 
-	size_t check_size = quote->size;
-	unsigned char *message = data_read("../quote.bin", &check_size);
-	if(memcmp(quote->attestationData, message, quote->size)==0)
-		printf("quote check OK\n");
-	else
-		printf("quote check failed\n");
+	TPM2B_ATTEST oquote;
+	size_t offset_oquote = 0;
+	uint8_t buffer_oquote[4096];
+	size_t size_oquote = 0;
+
+	Tss2_MU_TPM2B_ATTEST_Unmarshal(buffer_oquote, size_oquote, &offset_oquote, &oquote);
 
     TPM2B_MAX_BUFFER data;
-    data.size = quote->size;
-    memcpy(data.buffer, quote->attestationData, quote->size);
-
+	memcpy(data.buffer, oquote.attestationData, size_oquote);
     TPM2B_DIGEST *digest = NULL;
     TPMT_TK_HASHCHECK *validation = NULL;
 
@@ -305,20 +305,32 @@ int main(void){
     rc_check(rc, t_ctx, es_ctx);
     printf("hash OK\n");
 
-
     TPMT_TK_VERIFIED *valid;
+
+	TPMT_SIGNATURE osignature;
+	size_t offset_osig = 0;
+    uint8_t buffer_osig[4096];
+    size_t size_osig = 0;
+	Tss2_MU_TPMT_SIGNATURE_Unmarshal(buffer_osig, size_osig, &offset_osig, &osignature);
+
+//ak.pubをpkeyにする	
 
     rc = Esys_VerifySignature(
             es_ctx,
             handle,
             ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
             digest,
-            signature,
+            &osignature,
             &valid
             );
     rc_check(rc, t_ctx, es_ctx);
     printf("verify OK\n");
-
+/*
+	if(memcmp(quote->attestationData, message, quote->size)==0)
+		printf("quote check OK\n");
+	else
+		printf("quote check failed\n");
+*/
 	Esys_Free(outPublic);
     Esys_Free(primary_Data);
     Esys_Free(primary_Hash);

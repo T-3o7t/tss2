@@ -5,8 +5,7 @@
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_rc.h>
 #include <tss2/tss2_common.h>
-
-//#include <tss2/tss2_mu.h>
+#include <tss2/tss2_mu.h>
 
 static void ctx_finalize(TSS2_TCTI_CONTEXT *tcti, ESYS_CONTEXT *esys){
     if(esys){
@@ -264,48 +263,31 @@ int main(void){
             );
     rc_check(rc, t_ctx, es_ctx);
     printf("quote OK\n");
-	
+
+	size_t q_offset = 0;
+	uint8_t q_buffer[4096];
+
+	Tss2_MU_TPM2B_ATTEST_Marshal(quote, q_buffer, sizeof(q_buffer), &q_offset);
 	FILE *fp_quote = fopen("../quote.bin", "wb");
-	fwrite(quote->attestationData, 1, quote->size, fp_quote);
+	fwrite(q_buffer, 1, q_offset, fp_quote);
 	fclose(fp_quote);
 
+	size_t s_offset = 0;
+	uint8_t s_buffer[4096];
+
+	Tss2_MU_TPMT_SIGNATURE_Marshal(signature, s_buffer, sizeof(s_buffer), &s_offset);
 	FILE *fp_sig = fopen("../sig.bin", "wb");
-	fwrite(signature->signature.rsassa.sig.buffer, 1, signature->signature.rsassa.sig.size, fp_sig);
+	fwrite(s_buffer, 1, s_offset, fp_sig);
 	fclose(fp_sig);
-/*
-    TPM2B_MAX_BUFFER data;
-    data.size = quote->size;
-    memcpy(data.buffer, quote->attestationData, quote->size);
 
-    TPM2B_DIGEST *digest = NULL;
-    TPMT_TK_HASHCHECK *validation = NULL;
+	size_t ak_offset = 0;
+	uint8_t ak_buffer[4096];
 
-    rc = Esys_Hash(
-        es_ctx,
-        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-        &data,
-        TPM2_ALG_SHA256,
-        ESYS_TR_RH_NULL,
-        &digest,
-        &validation
-    );
-    rc_check(rc, t_ctx, es_ctx);
-    printf("hash OK\n");
+	Tss2_MU_TPM2B_PUBLIC_Marshal(ak_pub, ak_buffer, sizeof(ak_buffer), &ak_offset);
+	FILE *fp_ak = fopen("../ak.bin", "wb");
+	fwrite(ak_buffer, 1, ak_offset, fp_ak);
+	fclose(fp_ak);
 
-
-    TPMT_TK_VERIFIED *valid;
-
-    rc = Esys_VerifySignature(
-            es_ctx,
-            handle,
-            ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-            digest,
-            signature,
-            &valid
-            );
-    rc_check(rc, t_ctx, es_ctx);
-    printf("verify OK\n");
-*/
 	Esys_Free(outPublic);
     Esys_Free(primary_Data);
     Esys_Free(primary_Hash);
