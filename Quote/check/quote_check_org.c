@@ -48,6 +48,7 @@ static unsigned char *data_read(const char *path, size_t *out_size) {
     return buf;
 }
 
+
 static void ctx_finalize(TSS2_TCTI_CONTEXT *tcti, ESYS_CONTEXT *esys){
     if(esys){
         Esys_Finalize(&esys);
@@ -281,14 +282,10 @@ int main(void){
 
 	size_t check_size = quote->size;
 	unsigned char *message = data_read("../quote.bin", &check_size);
-	if(memcmp(quote->attestationData, message, quote->size)==0)
-		printf("quote check OK\n");
-	else
-		printf("quote check failed\n");
 
     TPM2B_MAX_BUFFER data;
-    data.size = quote->size;
-    memcpy(data.buffer, quote->attestationData, quote->size);
+    data.size = check_size;
+    memcpy(data.buffer, message, check_size);
 
     TPM2B_DIGEST *digest = NULL;
     TPMT_TK_HASHCHECK *validation = NULL;
@@ -307,17 +304,30 @@ int main(void){
 
 
     TPMT_TK_VERIFIED *valid;
+	TPMT_SIGNATURE *sig_check = calloc(1, sizeof(TPMT_SIGNATURE));
+	size_t sig_size;
+	unsigned char *sig_read = data_read("../sig.bin", &sig_size);
+
+	sig_check->sigAlg = TPM2_ALG_RSASSA;
+	sig_check->signature.rsassa.hash = TPM2_ALG_SHA256;
+	sig_check->signature.rsassa.sig.size = sig_size;
+	memcpy(sig_check->signature.rsassa.sig.buffer, sig_read, sig_size);
 
     rc = Esys_VerifySignature(
             es_ctx,
             handle,
             ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
             digest,
-            signature,
+            sig_check,
             &valid
             );
     rc_check(rc, t_ctx, es_ctx);
     printf("verify OK\n");
+
+	if(memcmp(quote->attestationData, message, quote->size)==0)
+		printf("quote check OK\n");
+	else
+		printf("quote check failed\n");
 
 	Esys_Free(outPublic);
     Esys_Free(primary_Data);
