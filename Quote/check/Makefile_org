@@ -4,7 +4,7 @@ LDFLAGS = -ltss2-tctildr -ltss2-esys -ltss2-rc -ltss2-mu -lcrypto -lssl
 
 TARGET  = quote_check
 
-SRCS    = quote_check.c ak_load.c
+SRCS    = quote_check.c
 OBJS    = $(SRCS:.c=.o)
 
 all: $(TARGET)

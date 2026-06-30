@@ -272,6 +272,9 @@ int main(void){
 	fwrite(q_buffer, 1, q_offset, fp_quote);
 	fclose(fp_quote);
 
+	printf("quote->size = %u\n", quote->size);
+	printf("offset    = %zu\n", q_offset);
+
 	size_t s_offset = 0;
 	uint8_t s_buffer[4096];
 

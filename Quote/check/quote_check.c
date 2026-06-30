@@ -1,13 +1,4 @@
-#include <stdio.h>
-
-#include <string.h>
-#include <tss2/tss2_tctildr.h>
-#include <tss2/tss2_esys.h>
-#include <tss2/tss2_rc.h>
-#include <tss2/tss2_common.h>
-#include <tss2/tss2_mu.h>
-#include <openssl/pem.h>
-#include <openssl/err.h>
+#include "quote_check.h"
 
 static unsigned char *data_read(const char *path, size_t *out_size) {
     FILE *fp = fopen(path, "rb");
@@ -49,20 +40,36 @@ static unsigned char *data_read(const char *path, size_t *out_size) {
     return buf;
 }
 
+static uint8_t *blob_load(char *file_name, size_t *size){
+    FILE *fp = fopen(file_name, "rb");
+
+    fseek(fp, 0, SEEK_END);
+    *size = ftell(fp);
+    rewind(fp);
+
+    uint8_t *buffer = malloc(*size);
+
+	if (fread(buffer, 1, *size, fp) != *size) {
+    	fprintf(stderr, "fread failed\n");
+    	exit(EXIT_FAILURE);
+	}
+    fclose(fp);
+    return buffer;
+}
 
 static void ctx_finalize(TSS2_TCTI_CONTEXT *tcti, ESYS_CONTEXT *esys){
-    if(esys){
+    if (esys) {
         Esys_Finalize(&esys);
         free(esys);
     }
-    if(tcti){
+    if (tcti) {
         Tss2_TctiLdr_Finalize(&tcti);
         free(tcti);
     }
 }
 
 static void rc_check(TSS2_RC rc, TSS2_TCTI_CONTEXT *tcti, ESYS_CONTEXT *esys){
-    if(rc != TSS2_RC_SUCCESS){
+    if (rc != TSS2_RC_SUCCESS) {
         printf("Failed:0x%x\n", rc);
         printf("%s\n", Tss2_RC_Decode(rc));
         ctx_finalize(tcti, esys);
@@ -78,7 +85,7 @@ int main(void){
     TSS2_ABI_VERSION *CURRENT = NULL;
 
     rc = Tss2_TctiLdr_Initialize(NULL, &t_ctx);
-    if(rc != TSS2_RC_SUCCESS){
+    if (rc != TSS2_RC_SUCCESS) {
         printf("tctildr initialize failed\n");
         free(es_ctx);
         return 1;
@@ -86,7 +93,7 @@ int main(void){
     printf("tctildr initialize success\n");
 
     rc = Esys_Initialize(&es_ctx, t_ctx, CURRENT);
-    if(rc != TSS2_RC_SUCCESS){
+    if (rc != TSS2_RC_SUCCESS) {
         printf("esys initialize failed:0x%x\n",rc);
         free(t_ctx);
         free(es_ctx);
@@ -280,51 +287,62 @@ int main(void){
             );
     rc_check(rc, t_ctx, es_ctx);
     printf("quote OK\n");
+/*
+	TPM2B_ATTEST quote_loaded;
+	size_t quote_loaded_offset = 0;
+	size_t quote_loaded_size;
+	uint8_t *quote_loaded_buffer = blob_load("../quote.bin", &quote_loaded_size);
+	
+	Tss2_MU_TPM2B_ATTEST_Unmarshal(quote_loaded_buffer, quote_loaded_size, &quote_loaded_offset, &quote_loaded);
+*/
+	size_t quote_loaded_size;
+	uint8_t *quote_loaded_buffer = blob_load("../quote.bin", &quote_loaded_size);
+	printf("quote_loaded_size = %zu\n", quote_loaded_size);
 
-	TPM2B_ATTEST oquote;
-	size_t offset_oquote = 0;
-	uint8_t buffer_oquote[4096];
-	size_t size_oquote = 0;
+	TPMT_SIGNATURE signature_loaded;
+	size_t sig_loaded_offset = 0;
+    size_t sig_loaded_size;
+    uint8_t *sig_loaded_buffer = blob_load("../sig.bin", &sig_loaded_size);
 
-	Tss2_MU_TPM2B_ATTEST_Unmarshal(buffer_oquote, size_oquote, &offset_oquote, &oquote);
+	Tss2_MU_TPMT_SIGNATURE_Unmarshal(sig_loaded_buffer, sig_loaded_size, &sig_loaded_offset, &signature_loaded);
+/*	printf("sigAlg = 0x%x\n", signature_loaded.sigAlg);
+	printf("hash = 0x%x\n", signature_loaded.signature.rsassa.hash);
+	printf("sig size = %u\n", signature_loaded.signature.rsassa.sig.size);
+*/
+	TPM2B_PUBLIC ak_pub_loaded;
+	size_t ak_loaded_offset = 0;
+	size_t ak_loaded_size;
+	uint8_t *ak_loaded_buffer = blob_load("../ak.bin", &ak_loaded_size);
+	Tss2_MU_TPM2B_PUBLIC_Unmarshal(ak_loaded_buffer, ak_loaded_size, &ak_loaded_offset, &ak_pub_loaded);
 
-    TPM2B_MAX_BUFFER data;
-	memcpy(data.buffer, oquote.attestationData, size_oquote);
-    TPM2B_DIGEST *digest = NULL;
-    TPMT_TK_HASHCHECK *validation = NULL;
+	EVP_PKEY *pkey = NULL;
+    bool ret = ak_load(&ak_pub_loaded, &pkey);
+    if (!ret)
+		return false;
 
-    rc = Esys_Hash(
-        es_ctx,
-        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-        &data,
-        TPM2_ALG_SHA256,
-        ESYS_TR_RH_NULL,
-        &digest,
-        &validation
-    );
-    rc_check(rc, t_ctx, es_ctx);
-    printf("hash OK\n");
+	EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+	if (!mdctx)
+		return false;
+	if (EVP_DigestVerifyInit(mdctx, NULL, EVP_sha256(), NULL, pkey) <= 0)
+	    return false;
+	if (EVP_DigestVerifyUpdate(mdctx, quote_loaded_buffer, quote_loaded_size) <= 0)
+	    return false;
 
-    TPMT_TK_VERIFIED *valid;
+	int rt = EVP_DigestVerifyFinal(mdctx, signature_loaded.signature.rsassa.sig.buffer,
+        							signature_loaded.signature.rsassa.sig.size);
+	EVP_MD_CTX_free(mdctx);
+	if (rt == 1)
+	    printf("Signature Verify OK\n");
+	else if (rt == 0)
+    	printf("Signature Verify NG\n");
+	else
+    	printf("OpenSSL Error\n");
 
-	TPMT_SIGNATURE osignature;
-	size_t offset_osig = 0;
-    uint8_t buffer_osig[4096];
-    size_t size_osig = 0;
-	Tss2_MU_TPMT_SIGNATURE_Unmarshal(buffer_osig, size_osig, &offset_osig, &osignature);
-
-//ak.pubをpkeyにする	
-
-    rc = Esys_VerifySignature(
-            es_ctx,
-            handle,
-            ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
-            digest,
-            &osignature,
-            &valid
-            );
-    rc_check(rc, t_ctx, es_ctx);
-    printf("verify OK\n");
+/*
+	EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PADDING);
+	EVP_PKEY_CTX_set_signature_md(pkey_ctx, EVP_sha256());
+	rc = EVP_PKEY_verify(pkey_ctx, signature_loaded.signature.rsassa.sig.buffer, signature_loaded.signature.rsassa.sig.size, digest, 32);
+*/
 /*
 	if(memcmp(quote->attestationData, message, quote->size)==0)
 		printf("quote check OK\n");
@@ -343,6 +361,9 @@ int main(void){
 
     Esys_FlushContext(es_ctx, handle);
     Esys_FlushContext(es_ctx, primary_handle);
+	
+	EVP_PKEY_free(pkey);
+    EVP_PKEY_CTX_free(pkey_ctx);
 
     ctx_finalize(t_ctx, es_ctx);	
     return 0;
