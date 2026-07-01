@@ -287,28 +287,30 @@ int main(void){
             );
     rc_check(rc, t_ctx, es_ctx);
     printf("quote OK\n");
-/*
+
+	TPMS_ATTEST Digest;
+	size_t Digest_offset = 0;
+	Tss2_MU_TPMS_ATTEST_Unmarshal(quote->attestationData, quote->size, &Digest_offset, &Digest);
+
 	TPM2B_ATTEST quote_loaded;
 	size_t quote_loaded_offset = 0;
 	size_t quote_loaded_size;
 	uint8_t *quote_loaded_buffer = blob_load("../quote.bin", &quote_loaded_size);
 	
 	Tss2_MU_TPM2B_ATTEST_Unmarshal(quote_loaded_buffer, quote_loaded_size, &quote_loaded_offset, &quote_loaded);
+	printf("quote.size = %u\n", quote_loaded.size);
+/*
+	uint8_t quote_marshal_buffer[4096];
+	size_t quote_marshal_len = 0;
+	Tss2_MU_TPM2B_ATTEST_Marshal(&quote_loaded, quote_marshal_buffer, sizeof(quote_marshal_buffer), &quote_marshal_len);
 */
-	size_t quote_loaded_size;
-	uint8_t *quote_loaded_buffer = blob_load("../quote.bin", &quote_loaded_size);
-	printf("quote_loaded_size = %zu\n", quote_loaded_size);
-
 	TPMT_SIGNATURE signature_loaded;
 	size_t sig_loaded_offset = 0;
     size_t sig_loaded_size;
     uint8_t *sig_loaded_buffer = blob_load("../sig.bin", &sig_loaded_size);
 
 	Tss2_MU_TPMT_SIGNATURE_Unmarshal(sig_loaded_buffer, sig_loaded_size, &sig_loaded_offset, &signature_loaded);
-/*	printf("sigAlg = 0x%x\n", signature_loaded.sigAlg);
-	printf("hash = 0x%x\n", signature_loaded.signature.rsassa.hash);
-	printf("sig size = %u\n", signature_loaded.signature.rsassa.sig.size);
-*/
+
 	TPM2B_PUBLIC ak_pub_loaded;
 	size_t ak_loaded_offset = 0;
 	size_t ak_loaded_size;
@@ -320,17 +322,15 @@ int main(void){
     if (!ret)
 		return false;
 
-	EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
-	if (!mdctx)
-		return false;
-	if (EVP_DigestVerifyInit(mdctx, NULL, EVP_sha256(), NULL, pkey) <= 0)
-	    return false;
-	if (EVP_DigestVerifyUpdate(mdctx, quote_loaded_buffer, quote_loaded_size) <= 0)
-	    return false;
+	unsigned char check_digest[32];
+	SHA256(quote_loaded.attestationData, quote_loaded.size, check_digest);
 
-	int rt = EVP_DigestVerifyFinal(mdctx, signature_loaded.signature.rsassa.sig.buffer,
-        							signature_loaded.signature.rsassa.sig.size);
-	EVP_MD_CTX_free(mdctx);
+	EVP_PKEY_CTX *pkey_ctx = EVP_PKEY_CTX_new(pkey, NULL);
+	EVP_PKEY_verify_init(pkey_ctx);
+
+	EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PADDING);
+	EVP_PKEY_CTX_set_signature_md(pkey_ctx, EVP_sha256());
+	int rt = EVP_PKEY_verify(pkey_ctx, signature_loaded.signature.rsassa.sig.buffer, signature_loaded.signature.rsassa.sig.size, check_digest, 32);
 	if (rt == 1)
 	    printf("Signature Verify OK\n");
 	else if (rt == 0)
@@ -338,17 +338,15 @@ int main(void){
 	else
     	printf("OpenSSL Error\n");
 
-/*
-	EVP_PKEY_CTX_set_rsa_padding(pkey_ctx, RSA_PKCS1_PADDING);
-	EVP_PKEY_CTX_set_signature_md(pkey_ctx, EVP_sha256());
-	rc = EVP_PKEY_verify(pkey_ctx, signature_loaded.signature.rsassa.sig.buffer, signature_loaded.signature.rsassa.sig.size, digest, 32);
-*/
-/*
-	if(memcmp(quote->attestationData, message, quote->size)==0)
+	TPMS_ATTEST loaded_Digest;
+	size_t loaded_Digest_offset = 0;
+	Tss2_MU_TPMS_ATTEST_Unmarshal(quote_loaded.attestationData, quote_loaded.size, &loaded_Digest_offset, &loaded_Digest);
+	
+	if (memcmp(Digest.attested.quote.pcrDigest.buffer, loaded_Digest.attested.quote.pcrDigest.buffer, Digest.attested.quote.pcrDigest.size)==0)
 		printf("quote check OK\n");
 	else
 		printf("quote check failed\n");
-*/
+
 	Esys_Free(outPublic);
     Esys_Free(primary_Data);
     Esys_Free(primary_Hash);
@@ -363,7 +361,6 @@ int main(void){
     Esys_FlushContext(es_ctx, primary_handle);
 	
 	EVP_PKEY_free(pkey);
-    EVP_PKEY_CTX_free(pkey_ctx);
 
     ctx_finalize(t_ctx, es_ctx);	
     return 0;

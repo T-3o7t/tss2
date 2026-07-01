@@ -13,11 +13,9 @@
 #include <tss2/tss2_common.h>
 #include <tss2/tss2_mu.h>
 #include <openssl/evp.h>
-#include <openssl/param_build.h>
-#include <openssl/core_names.h>
-#include <openssl/bn.h>
+#include <openssl/rsa.h>
+#include <openssl/sha.h>
 
 bool ak_load(TPM2B_PUBLIC *ak_pub, EVP_PKEY **pkey);
-
 
 #endif

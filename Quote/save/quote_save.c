@@ -8,18 +8,18 @@
 #include <tss2/tss2_mu.h>
 
 static void ctx_finalize(TSS2_TCTI_CONTEXT *tcti, ESYS_CONTEXT *esys){
-    if(esys){
+    if (esys){
         Esys_Finalize(&esys);
         free(esys);
     }
-    if(tcti){
+    if (tcti){
         Tss2_TctiLdr_Finalize(&tcti);
         free(tcti);
     }
 }
 
 static void rc_check(TSS2_RC rc, TSS2_TCTI_CONTEXT *tcti, ESYS_CONTEXT *esys){
-    if(rc != TSS2_RC_SUCCESS){
+    if (rc != TSS2_RC_SUCCESS){
         printf("Failed:0x%x\n", rc);
         printf("%s\n", Tss2_RC_Decode(rc));
         ctx_finalize(tcti, esys);
@@ -35,7 +35,7 @@ int main(void){
     TSS2_ABI_VERSION *CURRENT = NULL;
 
     rc = Tss2_TctiLdr_Initialize(NULL, &t_ctx);
-    if(rc != TSS2_RC_SUCCESS){
+    if (rc != TSS2_RC_SUCCESS){
         printf("tctildr initialize failed\n");
         free(es_ctx);
         return 1;
@@ -43,7 +43,7 @@ int main(void){
     printf("tctildr initialize success\n");
 
     rc = Esys_Initialize(&es_ctx, t_ctx, CURRENT);
-    if(rc != TSS2_RC_SUCCESS){
+    if (rc != TSS2_RC_SUCCESS){
         printf("esys initialize failed:0x%x\n",rc);
         free(t_ctx);
         free(es_ctx);
@@ -183,20 +183,7 @@ int main(void){
             );
     rc_check(rc, t_ctx, es_ctx);
     printf("load OK\n");
-/*
-    uint8_t ak_pub_buf[1024];
-    size_t ak_offset = 0;
 
-    rc = Tss2_MU_TPM2B_PUBLIC_Marshal(
-            ak_pub,
-            ak_pub_buf,
-            sizeof(ak_pub_buf),
-            &ak_offset
-            );
-    rc_check(rc, t_ctx, es_ctx);
-    printf("Marshal OK\n");
-    printf("Marshal size = %zu\n", ak_offset);	
-*/
     TPM2B_DATA qualifyingData;
     qualifyingData.size = 20;
     TPM2B_DIGEST *nonce;
